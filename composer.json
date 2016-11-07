@@ -31,5 +31,11 @@
   },
   "bin": [
     "bin/thruway"
+  ],
+  "repositories": [
+    {
+      "type": "vcs",
+      "url": "https://github.com/davidwdan/php-readline-react"
+    }
   ]
 }
