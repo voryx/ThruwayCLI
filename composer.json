@@ -37,5 +37,10 @@
       "type": "vcs",
       "url": "https://github.com/davidwdan/php-readline-react"
     }
-  ]
+  ],
+  "autoload": {
+    "psr-4": {
+      "Voryx\\": "src"
+    }
+  }
 }
