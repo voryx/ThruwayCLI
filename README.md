@@ -6,16 +6,17 @@ Thruway CLI is a command line tool that allows you to execute WAMP commands for 
 
 ## Installation
 
-Download zip file or clone this repository and then install dependencies using [composer](https://getcomposer.org).
+Download thruway-cli.phar from the latest [release](https://github.com/voryx/ThruwayCLI/releases/).
 
 ```bash
-$ composer.phar install
+$ chmod 755 thruway-cli.phar
+$ sudo mv thruway-cli.phar /usr/local/bin/thruway-cli
 ```
 
 ## Example
 
 ```bash
-bin/thruway wss://demo.crossbar.io/ws realm1
+$ thruway-cli wss://demo.crossbar.io/ws realm1
 ```
 
 ## Commands
