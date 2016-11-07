@@ -23,7 +23,7 @@ if (!isset($argv[1]) || !isset($argv[2])) {
     return;
 }
 
-$historyFile = ".history";
+$historyFile = $_SERVER['HOME']."/.thruway-history";
 $client      = new Client($argv[1], $argv[2]);
 $router      = new Router();
 $disposable  = new SerialDisposable();
