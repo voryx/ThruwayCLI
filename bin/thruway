@@ -18,6 +18,11 @@ require __DIR__ . '/../vendor/autoload.php';
 
 error_reporting(-1);
 
+if (!isset($argv[1]) || !isset($argv[2])) {
+    echo "You must provide a WAMP url and realm.  ie.  {$argv[0]} wss://demo.crossbar.io/ws realm1", PHP_EOL;
+    return;
+}
+
 $historyFile = ".history";
 $client      = new Client($argv[1], $argv[2]);
 $router      = new Router();
@@ -58,7 +63,7 @@ $router->add('register <uri> [<options>]', function (array $args) use ($client, 
         echo "RPC called with: ", json_encode($args), PHP_EOL;
 
         if (isset($details->receive_progress) && $details->receive_progress === true) {
-            echo "Reply to RPC. Press enter to send and type 'done' when finished.", PHP_EOL,"thruway> ";
+            echo "Reply to RPC. Press enter to send and type 'done' when finished.", PHP_EOL, "thruway> ";
             return $line->takeWhile(function ($l) {
                 return $l !== "done";
             })->doOnCompleted(function () use (&$awaitingReply) {
@@ -66,7 +71,7 @@ $router->add('register <uri> [<options>]', function (array $args) use ($client, 
             });
         }
 
-        echo "Reply to RPC", PHP_EOL,"thruway> ";
+        echo "Reply to RPC", PHP_EOL, "thruway> ";
         return $line->take(1)->doOnNext(function () use (&$awaitingReply) {
             $awaitingReply = false;
         });
