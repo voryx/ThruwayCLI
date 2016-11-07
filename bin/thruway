@@ -1,0 +1,150 @@
+#!/usr/bin/env php
+<?php
+
+use Rx\Extra\Observable\FromEventEmitterObservable;
+use Rx\Scheduler\EventLoopScheduler;
+use Rx\Disposable\SerialDisposable;
+use Clue\React\Readline\Readline;
+use Rx\React\FromFileObservable;
+use Clue\Commander\Router;
+use Rx\Thruway\Client;
+use Rx\Observable;
+
+if (PHP_SAPI !== 'cli') {
+    echo 'Warning: Thruway CLI should be invoked via the CLI version of PHP, not the ' . PHP_SAPI . ' SAPI' . PHP_EOL;
+}
+
+require __DIR__ . '/../vendor/autoload.php';
+
+error_reporting(-1);
+
+$historyFile = ".history";
+$client      = new Client($argv[1], $argv[2]);
+$router      = new Router();
+$disposable  = new SerialDisposable();
+$loop        = \EventLoop\getLoop();
+
+$router->add('exit [<code>]', function (array $args) {
+    exit(isset($args['code']) ? (int)$args['code'] : 0);
+});
+
+$router->add('help', function () use ($router) {
+    echo 'Usage:' . PHP_EOL;
+    foreach ($router->getRoutes() as $route) {
+        echo '  ' . $route . PHP_EOL;
+    }
+});
+
+$router->add('publish <uri> <value> [<options>]', function (array $args) use ($client) {
+    $client->publish($args['uri'], $args['value'], (array)json_decode($args['options'] ?? null));
+});
+
+$router->add('call <uri> [<args>] [<options>]', function (array $args) use ($client) {
+    return $client->call($args['uri'], (array)json_decode($args['args'] ?? null), [], (array)json_decode($args['options'] ?? null));
+});
+
+$router->add('subscribe <uri> [<options>]', function (array $args) use ($client) {
+    return $client->topic($args['uri'], (array)json_decode($args['options'] ?? null));
+});
+
+$router->add('cancel', function () use ($disposable) {
+    $disposable->dispose();
+});
+
+$awaitingReply = false;
+$router->add('register <uri> [<options>]', function (array $args) use ($client, &$line, &$awaitingReply) {
+    return $client->registerExtended($args['uri'], function ($args = null, $argskw = null, $details) use (&$line, &$awaitingReply) {
+        $awaitingReply = true;
+        echo "RPC called with: ", json_encode($args), PHP_EOL;
+
+        if (isset($details->receive_progress) && $details->receive_progress === true) {
+            echo "Reply to RPC. Press enter to send and type 'done' when finished.", PHP_EOL,"thruway> ";
+            return $line->takeWhile(function ($l) {
+                return $l !== "done";
+            })->doOnCompleted(function () use (&$awaitingReply) {
+                $awaitingReply = false;
+            });
+        }
+
+        echo "Reply to RPC", PHP_EOL,"thruway> ";
+        return $line->take(1)->doOnNext(function () use (&$awaitingReply) {
+            $awaitingReply = false;
+        });
+
+    }, (array)json_decode($args['options'] ?? null));
+});
+
+echo 'Thruway CLI: type help to see a list commands.' . PHP_EOL;
+
+$readline = new Readline($loop, 'thruway> ');
+$readline->setAutocompleteWords(array_map(function ($route) {
+    return explode(' ', $route)[0];
+}, $router->getRoutes()));
+
+//Read the input from the CLI
+$input = (new FromEventEmitterObservable($readline, 'line'))
+    ->pluck(0)
+    ->filter(function ($line) {
+        return trim($line) !== '';
+    })
+    ->share();
+
+//Split off the quit stream
+list($quit, $line) = $input->partition(function (string $l) {
+    return ($l === 'quit' || $l === 'exit');
+});
+
+//Process the line through the cli router
+$line
+    ->filter(function () use (&$awaitingReply) {
+        return $awaitingReply === false;
+    })
+    ->map('Clue\Arguments\split')
+    ->map([$router, 'handleArgs'])
+    ->catchError(function (Exception $e) {
+        echo $e->getMessage(), PHP_EOL;
+        throw $e;
+    })
+    ->retry()
+    ->filter(function ($result) {
+        return $result instanceof Observable;
+    })
+    ->subscribeCallback(function (Observable $result) use ($disposable) {
+        $subscription = $result->subscribeCallback(
+            function ($r) {
+                echo json_encode($r), PHP_EOL;
+            },
+            function (Exception $e) {
+                echo $e->getMessage(), PHP_EOL;
+            });
+        $disposable->setDisposable($subscription);
+    });
+
+////Record History
+$history = fopen($historyFile, 'a');
+$input->subscribeCallback(function ($line) use ($history) {
+    fwrite($history, $line . PHP_EOL);
+});
+
+//Reload history from disk
+(new FromFileObservable($historyFile))
+    ->cut()
+    ->filter(function ($line) {
+        //don't include blank lines
+        return $line !== '';
+    })
+    ->distinctUntilChanged()
+    ->subscribeCallback(
+        [$readline, 'addHistory'],
+        function (Exception $e) {
+            echo $e->getMessage();
+        }
+    );
+
+//Handle Quit
+$quit
+    ->delay(100, new EventLoopScheduler($loop))
+    ->subscribeCallback(function ($line) use ($readline, $loop) {
+        $readline->pause();
+        $loop->stop();
+    });

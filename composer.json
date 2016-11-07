@@ -1,0 +1,35 @@
+{
+  "name": "voryx/thruway-cli",
+  "description": "CLI for Thruway (WAMP)",
+  "keywords": [
+    "thruway",
+    "wamp",
+    "websocket"
+  ],
+  "type": "library",
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "David Dan",
+      "email": "davidwdan@gmail.com"
+    },
+    {
+      "name": "Matt Bonneau",
+      "email": "matt@bonneau.net"
+    }
+  ],
+  "require": {
+    "php": "~7.0",
+    "voryx/event-loop": "^0.2.0",
+    "reactivex/rxphp": "dev-master",
+    "rx/thruway-client": "dev-master",
+    "clue/commander": "^1.0",
+    "clue/arguments": "^1.0",
+    "clue/readline-react": "dev-master",
+    "rx/stream": "dev-master",
+    "rx/operator-extras": "dev-master as 0.1.0"
+  },
+  "bin": [
+    "bin/thruway"
+  ]
+}
