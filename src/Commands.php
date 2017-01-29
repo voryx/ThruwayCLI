@@ -2,18 +2,31 @@
 
 namespace Voryx;
 
-use Clue\Commander\Router;
-use Rx\Disposable\SerialDisposable;
-use Rx\Thruway\Client;
-use Rx\Extra\Observable\FromEventEmitterObservable;
-use Rx\Scheduler\EventLoopScheduler;
-use Clue\React\Readline\Readline;
-use Rx\React\FromFileObservable;
 use Rx\Observable;
+use Rx\Scheduler;
+use Rx\Thruway\Client;
+use Interop\Async\Loop;
+use Clue\Commander\Router;
+use Clue\React\Stdio\Stdio;
+use Clue\React\Stdio\Readline;
+use Rx\React\FromFileObservable;
+use Rx\Disposable\SerialDisposable;
+use Rx\Observable\FromEventEmitterObservable;
+use WyriHaximus\React\AsyncInteropLoop\AsyncInteropLoop;
 
 class Commands
 {
-    private $wamp, $router, $awaitingReply, $disposable, $historyFile, $line;
+    private $wamp, $router, $awaitingReply, $disposable, $historyFile;
+
+    private $defaultPrompt = 'thruway> ';
+
+    private $stdio;
+
+    /** @var  Readline */
+    private $readLine;
+
+    /** @var  Observable */
+    private $line;
 
     public function __construct(Client $wamp, Router $router)
     {
@@ -21,17 +34,37 @@ class Commands
         $this->router        = $router;
         $this->awaitingReply = false;
         $this->disposable    = new SerialDisposable();
-        $this->historyFile   = $_SERVER['HOME'] . "/.thruway-history";
+        $this->historyFile   = $_SERVER['HOME'] . '/.thruway-history';
+        $this->stdio         = new Stdio(new AsyncInteropLoop());
+        $this->readLine      = $this->stdio->getReadline();
+        $this->readLine->setPrompt($this->defaultPrompt);
 
-        $loop = \EventLoop\getLoop();
+        $this->readLine->setAutocomplete(function ($word, $offset) use ($router) {
 
-        $readLine = new readLine($loop, 'thruway> ');
-        $readLine->setAutocompleteWords(array_map(function ($route) {
-            return explode(' ', $route)[0];
-        }, $router->getRoutes()));
+            if ($offset <= 1) {
+                return array_map(function ($route) {
+                    return explode(' ', $route)[0];
+                }, $router->getRoutes());
+            }
+
+            $result = [];
+            Observable::fromArray($this->readLine->listHistory(), Scheduler::getImmediate())
+                ->filter(function ($item) {
+                    return 0 === strpos($item, $this->readLine->getInput());
+                })
+                ->map(function ($item) use ($word) {
+                    return $word . ltrim($item, $this->readLine->getInput());
+                })
+                ->toArray()
+                ->subscribe(function ($a) use (&$result) {
+                    $result = $a;
+                });
+
+            return $result;
+        });
 
         //Read the input from the CLI
-        $input = (new FromEventEmitterObservable($readLine, 'line'))
+        $input = (new FromEventEmitterObservable($this->readLine))
             ->pluck(0)
             ->filter(function ($line) {
                 return trim($line) !== '';
@@ -50,28 +83,35 @@ class Commands
             })
             ->map('Clue\Arguments\split')
             ->map([$router, 'handleArgs'])
-            ->catchError(function (\Exception $e) {
-                echo $e->getMessage(), PHP_EOL;
+            ->catch(function (\Exception $e) {
+                $this->stdio->write($e->getMessage() . PHP_EOL);
                 throw $e;
             })
             ->retry()
             ->filter(function ($result) {
                 return $result instanceof Observable;
             })
-            ->subscribeCallback(function (Observable $result) {
-                $subscription = $result->subscribeCallback(
+            ->subscribe(function (Observable $result) {
+                $subscription = $result->subscribe(
                     function ($r) {
-                        echo json_encode($r), PHP_EOL;
+                        $this->stdio->write(json_encode($r) . PHP_EOL);
                     },
                     function (\Exception $e) {
-                        echo $e->getMessage(), PHP_EOL;
+                        $this->stdio->write($e->getMessage() . PHP_EOL);
                     });
                 $this->disposable->setDisposable($subscription);
             });
 
         //Record History
-        $history = fopen($this->historyFile, 'a');
-        $input->subscribeCallback(function ($line) use ($history) {
+        $history = fopen($this->historyFile, 'ab');
+        $input->subscribe(function ($line) use ($history) {
+            $all = $this->readLine->listHistory();
+
+            // skip empty line and duplicate of previous line
+            if (trim($line) !== '' && $line !== end($all)) {
+                $this->readLine->addHistory($line);
+            }
+
             fwrite($history, $line . PHP_EOL);
         });
 
@@ -83,46 +123,57 @@ class Commands
                 return $line !== '';
             })
             ->distinctUntilChanged()
-            ->subscribeCallback(
-                [$readLine, 'addHistory'],
+            ->subscribe(
+                [$this->readLine, 'addHistory'],
                 function (\Exception $e) {
-                    echo $e->getMessage();
+                    $this->stdio->write($e->getMessage());
                 }
             );
 
         //Handle Quit
         $quit
-            ->delay(100, new EventLoopScheduler($loop))
-            ->subscribeCallback(function ($line) use ($readLine, $loop) {
-                $readLine->pause();
-                $loop->stop();
+            ->delay(100)
+            ->subscribe(function ($line) {
+                $this->readLine->pause();
+                Loop::stop();
             });
     }
 
-    public function call(array $args):Observable
+    public function call(array $args): Observable
     {
         return $this->wamp->call($args['uri'], (array)json_decode($args['args'] ?? null), [], (array)json_decode($args['options'] ?? null));
     }
 
-    public function register(array $args):Observable
+    public function register(array $args): Observable
     {
-        return $this->wamp->registerExtended($args['uri'], function ($args = null, $argskw = null, $details) {
+        $uri = $args['uri'];
+        return $this->wamp->registerExtended($uri, function ($args = null, $argskw = null, $details) use ($uri) {
             $this->awaitingReply = true;
-            echo "RPC called with: ", json_encode($args), PHP_EOL;
+            $this->stdio->write("RPC '{$uri}' called with: " . json_encode($args) . PHP_EOL);
 
             if (isset($details->receive_progress) && $details->receive_progress === true) {
-                echo "Reply to RPC. Press enter to send and type 'done' when finished.", PHP_EOL, "thruway> ";
-                return $this->line->takeWhile(function ($l) {
-                    return $l !== "done";
-                })->doOnCompleted(function () {
-                    $this->awaitingReply = false;
-                });
+
+                $this->stdio->write("Type 'done' when finished." . PHP_EOL);
+                $this->readLine->setPrompt('Reply to RPC with valid json: ');
+                return $this->line
+                    ->takeWhile(function ($l) {
+                        return $l !== 'done';
+                    })
+                    ->doOnCompleted(function () {
+                        $this->awaitingReply = false;
+                        $this->readLine->setPrompt($this->defaultPrompt);
+                    });
             }
 
-            echo "Reply to RPC", PHP_EOL, "thruway> ";
-            return $this->line->take(1)->doOnNext(function () {
-                $this->awaitingReply = false;
-            });
+            $this->readLine->setPrompt('Reply to RPC with valid json: ');
+
+            return $this->line
+                ->take(1)
+                ->map('json_decode')
+                ->do(function () {
+                    $this->awaitingReply = false;
+                    $this->readLine->setPrompt($this->defaultPrompt);
+                });
 
         }, (array)json_decode($args['options'] ?? null));
     }
@@ -132,7 +183,7 @@ class Commands
         $this->wamp->publish($args['uri'], $args['value'], (array)json_decode($args['options'] ?? null));
     }
 
-    public function subscribe(array $args):Observable
+    public function subscribe(array $args): Observable
     {
         return $this->wamp->topic($args['uri'], (array)json_decode($args['options'] ?? null));
     }
@@ -144,9 +195,9 @@ class Commands
 
     public function help()
     {
-        echo 'Usage:' . PHP_EOL;
+        $this->stdio->write('Usage:' . PHP_EOL);
         foreach ($this->router->getRoutes() as $route) {
-            echo '  ' . $route . PHP_EOL;
+            $this->stdio->write('  ' . $route . PHP_EOL);
         }
     }
 

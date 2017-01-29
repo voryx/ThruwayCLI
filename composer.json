@@ -20,23 +20,17 @@
   ],
   "require": {
     "php": "~7.0",
-    "voryx/event-loop": "^0.2.0",
-    "reactivex/rxphp": "dev-master",
-    "rx/thruway-client": "dev-master",
+    "voryx/event-loop": "^2.0.1",
+    "reactivex/rxphp": "2.x-dev",
+    "rx/thruway-client": "2.0.x-dev",
     "clue/commander": "^1.0",
     "clue/arguments": "^1.0",
-    "clue/readline-react": "dev-master",
-    "rx/stream": "dev-master",
-    "rx/operator-extras": "dev-master as 0.1.0"
+    "rx/stream": "^2.0.0",
+    "rx/operator-extras": "^2.0.0",
+    "clue/stdio-react": "^1.0"
   },
   "bin": [
     "bin/thruway"
-  ],
-  "repositories": [
-    {
-      "type": "vcs",
-      "url": "https://github.com/davidwdan/php-readline-react"
-    }
   ],
   "autoload": {
     "psr-4": {
